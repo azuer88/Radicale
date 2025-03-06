@@ -3,7 +3,7 @@
 # Copyright © 2008 Nicolas Kandel
 # Copyright © 2008 Pascal Halter
 # Copyright © 2017-2020 Unrud <unrud@outlook.com>
-# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
+# Copyright © 2024-2025 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -104,6 +104,29 @@ def _convert_to_bool(value: Any) -> bool:
     return RawConfigParser.BOOLEAN_STATES[value.lower()]
 
 
+def imap_address(value):
+    if "]" in value:
+        pre_address, pre_address_port = value.rsplit("]", 1)
+    else:
+        pre_address, pre_address_port = "", value
+    if ":" in pre_address_port:
+        pre_address2, port = pre_address_port.rsplit(":", 1)
+        address = pre_address + pre_address2
+    else:
+        address, port = pre_address + pre_address_port, None
+    try:
+        return (address.strip(string.whitespace + "[]"),
+                None if port is None else int(port))
+    except ValueError:
+        raise ValueError("malformed IMAP address: %r" % value)
+
+
+def imap_security(value):
+    if value not in ("tls", "starttls", "none"):
+        raise ValueError("unsupported IMAP security: %r" % value)
+    return value
+
+
 def json_str(value: Any) -> dict:
     if not value:
         return {}
@@ -164,6 +187,10 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
             "help": "set CA certificate for validating clients",
             "aliases": ("--certificate-authority",),
             "type": filepath}),
+        ("script_name", {
+            "value": "",
+            "help": "script name to strip from URI if called by reverse proxy (default taken from HTTP_X_SCRIPT_NAME or SCRIPT_NAME)",
+            "type": str}),
         ("_internal_server", {
             "value": "False",
             "help": "the internal server is used",
@@ -180,9 +207,21 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
     ("auth", OrderedDict([
         ("type", {
             "value": "none",
-            "help": "authentication method",
+            "help": "authentication method (" + "|".join(auth.INTERNAL_TYPES) + ")",
             "type": str_or_callable,
             "internal": auth.INTERNAL_TYPES}),
+        ("cache_logins", {
+            "value": "false",
+            "help": "cache successful/failed logins for until expiration time",
+            "type": bool}),
+        ("cache_successful_logins_expiry", {
+            "value": "15",
+            "help": "expiration time for caching successful logins in seconds",
+            "type": int}),
+        ("cache_failed_logins_expiry", {
+            "value": "90",
+            "help": "expiration time for caching failed logins in seconds",
+            "type": int}),
         ("htpasswd_filename", {
             "value": "/etc/radicale/users",
             "help": "htpasswd filename",
@@ -191,10 +230,27 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
             "value": "autodetect",
             "help": "htpasswd encryption method",
             "type": str}),
+        ("htpasswd_cache", {
+            "value": "False",
+            "help": "enable caching of htpasswd file",
+            "type": bool}),
+        ("dovecot_connection_type", {
+            "value": "AF_UNIX",
+            "help": "Connection type for dovecot authentication",
+            "type": str_or_callable,
+            "internal": auth.AUTH_SOCKET_FAMILY}),
         ("dovecot_socket", {
             "value": "/var/run/dovecot/auth-client",
-            "help": "dovecot auth socket",
+            "help": "dovecot auth AF_UNIX socket",
             "type": str}),
+        ("dovecot_host", {
+            "value": "localhost",
+            "help": "dovecot auth AF_INET or AF_INET6 host",
+            "type": str}),
+        ("dovecot_port", {
+            "value": "12345",
+            "help": "dovecot auth port",
+            "type": int}),
         ("realm", {
             "value": "Radicale - Password Required",
             "help": "message displayed when a password is needed",
@@ -227,10 +283,14 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
             "value": "(cn={0})",
             "help": "the search filter to find the user DN to authenticate by the username",
             "type": str}),
-        ("ldap_load_groups", {
-            "value": "False",
-            "help": "load the ldap groups of the authenticated user",
-            "type": bool}),
+        ("ldap_user_attribute", {
+            "value": "",
+            "help": "the attribute to be used as username after authentication",
+            "type": str}),
+        ("ldap_groups_attribute", {
+            "value": "",
+            "help": "attribute to read the group memberships from",
+            "type": str}),
         ("ldap_use_ssl", {
             "value": "False",
             "help": "Use ssl on the ldap connection",
@@ -243,9 +303,33 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
             "value": "",
             "help": "The path to the CA file in pem format which is used to certificate the server certificate",
             "type": str}),
+        ("imap_host", {
+            "value": "localhost",
+            "help": "IMAP server hostname: address|address:port|[address]:port|*localhost*",
+            "type": imap_address}),
+        ("imap_security", {
+            "value": "tls",
+            "help": "Secure the IMAP connection: *tls*|starttls|none",
+            "type": imap_security}),
+        ("oauth2_token_endpoint", {
+            "value": "",
+            "help": "OAuth2 token endpoint URL",
+            "type": str}),
+        ("pam_group_membership", {
+            "value": "",
+            "help": "PAM group user should be member of",
+            "type": str}),
+        ("pam_service", {
+            "value": "radicale",
+            "help": "PAM service",
+            "type": str}),
         ("strip_domain", {
             "value": "False",
             "help": "strip domain from username",
+            "type": bool}),
+        ("uc_username", {
+            "value": "False",
+            "help": "convert username to uppercase, must be true for case-insensitive auth providers",
             "type": bool}),
         ("lc_username", {
             "value": "False",
@@ -279,6 +363,30 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
             "value": "/var/lib/radicale/collections",
             "help": "path where collections are stored",
             "type": filepath}),
+        ("filesystem_cache_folder", {
+            "value": "",
+            "help": "path where cache of collections is stored in case of use_cache_subfolder_* options are active",
+            "type": filepath}),
+        ("use_cache_subfolder_for_item", {
+            "value": "False",
+            "help": "use subfolder 'collection-cache' for 'item' cache file structure instead of inside collection folder",
+            "type": bool}),
+        ("use_cache_subfolder_for_history", {
+            "value": "False",
+            "help": "use subfolder 'collection-cache' for 'history' cache file structure instead of inside collection folder",
+            "type": bool}),
+        ("use_cache_subfolder_for_synctoken", {
+            "value": "False",
+            "help": "use subfolder 'collection-cache' for 'sync-token' cache file structure instead of inside collection folder",
+            "type": bool}),
+        ("use_mtime_and_size_for_item_cache", {
+            "value": "False",
+            "help": "use mtime and file size instead of SHA256 for 'item' cache (improves speed)",
+            "type": bool}),
+        ("folder_umask", {
+            "value": "",
+            "help": "umask for folder creation (empty: system default)",
+            "type": str}),
         ("max_sync_token_age", {
             "value": "2592000",  # 30 days
             "help": "delete sync token that are older",
@@ -351,6 +459,10 @@ DEFAULT_CONFIG_SCHEMA: types.CONFIG_SCHEMA = OrderedDict([
         ("rights_rule_doesnt_match_on_debug", {
             "value": "False",
             "help": "log rights rules which doesn't match on level=debug",
+            "type": bool}),
+        ("storage_cache_actions_on_debug", {
+            "value": "False",
+            "help": "log storage cache action on level=debug",
             "type": bool}),
         ("mask_passwords", {
             "value": "True",

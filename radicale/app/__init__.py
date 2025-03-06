@@ -3,7 +3,7 @@
 # Copyright © 2008 Pascal Halter
 # Copyright © 2008-2017 Guillaume Ayoub
 # Copyright © 2017-2019 Unrud <unrud@outlook.com>
-# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
+# Copyright © 2024-2025 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -68,6 +68,7 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
     _internal_server: bool
     _max_content_length: int
     _auth_realm: str
+    _script_name: str
     _extra_headers: Mapping[str, str]
     _permit_delete_collection: bool
     _permit_overwrite_collection: bool
@@ -87,6 +88,19 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
         self._response_content_on_debug = configuration.get("logging", "response_content_on_debug")
         self._auth_delay = configuration.get("auth", "delay")
         self._internal_server = configuration.get("server", "_internal_server")
+        self._script_name = configuration.get("server", "script_name")
+        if self._script_name:
+            if self._script_name[0] != "/":
+                logger.error("server.script_name must start with '/': %r", self._script_name)
+                raise RuntimeError("server.script_name option has to start with '/'")
+            else:
+                if self._script_name.endswith("/"):
+                    logger.error("server.script_name must not end with '/': %r", self._script_name)
+                    raise RuntimeError("server.script_name option must not end with '/'")
+                else:
+                    logger.info("Provided script name to strip from URI if called by reverse proxy: %r", self._script_name)
+        else:
+            logger.info("Default script name to strip from URI if called by reverse proxy is taken from HTTP_X_SCRIPT_NAME or SCRIPT_NAME")
         self._max_content_length = configuration.get(
             "server", "max_content_length")
         self._auth_realm = configuration.get("auth", "realm")
@@ -178,14 +192,18 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
             # Return response content
             return status_text, list(headers.items()), answers
 
+        reverse_proxy = False
         remote_host = "unknown"
         if environ.get("REMOTE_HOST"):
             remote_host = repr(environ["REMOTE_HOST"])
         elif environ.get("REMOTE_ADDR"):
             remote_host = environ["REMOTE_ADDR"]
         if environ.get("HTTP_X_FORWARDED_FOR"):
+            reverse_proxy = True
             remote_host = "%s (forwarded for %r)" % (
                 remote_host, environ["HTTP_X_FORWARDED_FOR"])
+        if environ.get("HTTP_X_FORWARDED_HOST") or environ.get("HTTP_X_FORWARDED_PROTO") or environ.get("HTTP_X_FORWARDED_SERVER"):
+            reverse_proxy = True
         remote_useragent = ""
         if environ.get("HTTP_USER_AGENT"):
             remote_useragent = " using %r" % environ["HTTP_USER_AGENT"]
@@ -204,24 +222,37 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
         # SCRIPT_NAME is already removed from PATH_INFO, according to the
         # WSGI specification.
         # Reverse proxies can overwrite SCRIPT_NAME with X-SCRIPT-NAME header
-        base_prefix_src = ("HTTP_X_SCRIPT_NAME" if "HTTP_X_SCRIPT_NAME" in
-                           environ else "SCRIPT_NAME")
-        base_prefix = environ.get(base_prefix_src, "")
-        if base_prefix and base_prefix[0] != "/":
-            logger.error("Base prefix (from %s) must start with '/': %r",
-                         base_prefix_src, base_prefix)
-            if base_prefix_src == "HTTP_X_SCRIPT_NAME":
-                return response(*httputils.BAD_REQUEST)
-            return response(*httputils.INTERNAL_SERVER_ERROR)
-        if base_prefix.endswith("/"):
-            logger.warning("Base prefix (from %s) must not end with '/': %r",
-                           base_prefix_src, base_prefix)
-            base_prefix = base_prefix.rstrip("/")
-        logger.debug("Base prefix (from %s): %r", base_prefix_src, base_prefix)
+        if self._script_name and (reverse_proxy is True):
+            base_prefix_src = "config"
+            base_prefix = self._script_name
+        else:
+            base_prefix_src = ("HTTP_X_SCRIPT_NAME" if "HTTP_X_SCRIPT_NAME" in
+                               environ else "SCRIPT_NAME")
+            base_prefix = environ.get(base_prefix_src, "")
+            if base_prefix and base_prefix[0] != "/":
+                logger.error("Base prefix (from %s) must start with '/': %r",
+                             base_prefix_src, base_prefix)
+                if base_prefix_src == "HTTP_X_SCRIPT_NAME":
+                    return response(*httputils.BAD_REQUEST)
+                return response(*httputils.INTERNAL_SERVER_ERROR)
+            if base_prefix.endswith("/"):
+                logger.warning("Base prefix (from %s) must not end with '/': %r",
+                               base_prefix_src, base_prefix)
+                base_prefix = base_prefix.rstrip("/")
+        if base_prefix:
+            logger.debug("Base prefix (from %s): %r", base_prefix_src, base_prefix)
+
         # Sanitize request URI (a WSGI server indicates with an empty path,
         # that the URL targets the application root without a trailing slash)
         path = pathutils.sanitize_path(unsafe_path)
         logger.debug("Sanitized path: %r", path)
+        if (reverse_proxy is True) and (len(base_prefix) > 0):
+            if path.startswith(base_prefix):
+                path_new = path.removeprefix(base_prefix)
+                logger.debug("Called by reverse proxy, remove base prefix %r from path: %r => %r", base_prefix, path, path_new)
+                path = path_new
+            else:
+                logger.warning("Called by reverse proxy, cannot removed base prefix %r from path: %r as not matching", base_prefix, path)
 
         # Get function corresponding to method
         function = getattr(self, "do_%s" % request_method, None)
@@ -252,7 +283,7 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
                 self.configuration, environ, base64.b64decode(
                     authorization.encode("ascii"))).split(":", 1)
 
-        user = self._auth.login(login, password) or "" if login else ""
+        (user, info) = self._auth.login(login, password) or ("", "") if login else ("", "")
         if self.configuration.get("auth", "type") == "ldap":
             try:
                 logger.debug("Groups %r", ",".join(self._auth._ldap_groups))
@@ -260,16 +291,16 @@ class Application(ApplicationPartDelete, ApplicationPartHead,
             except AttributeError:
                 pass
         if user and login == user:
-            logger.info("Successful login: %r", user)
+            logger.info("Successful login: %r (%s)", user, info)
         elif user:
-            logger.info("Successful login: %r -> %r", login, user)
+            logger.info("Successful login: %r -> %r (%s)", login, user, info)
         elif login:
-            logger.warning("Failed login attempt from %s: %r",
-                           remote_host, login)
+            logger.warning("Failed login attempt from %s: %r (%s)",
+                           remote_host, login, info)
             # Random delay to avoid timing oracles and bruteforce attacks
             if self._auth_delay > 0:
                 random_delay = self._auth_delay * (0.5 + random.random())
-                logger.debug("Sleeping %.3f seconds", random_delay)
+                logger.debug("Failed login, sleeping random: %.3f sec", random_delay)
                 time.sleep(random_delay)
 
         if user and not pathutils.is_safe_path_component(user):

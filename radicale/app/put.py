@@ -2,8 +2,9 @@
 # Copyright © 2008 Nicolas Kandel
 # Copyright © 2008 Pascal Halter
 # Copyright © 2008-2017 Guillaume Ayoub
-# Copyright © 2017-2018 Unrud <unrud@outlook.com>
-# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
+# Copyright © 2017-2020 Unrud <unrud@outlook.com>
+# Copyright © 2020-2023 Tuna Celik <tuna@jakpark.com>
+# Copyright © 2024-2025 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,8 +19,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Radicale.  If not, see <http://www.gnu.org/licenses/>.
 
+import errno
 import itertools
 import posixpath
+import re
 import socket
 import sys
 from http import client
@@ -29,13 +32,16 @@ from typing import Iterator, List, Mapping, MutableMapping, Optional, Tuple
 import vobject
 
 import radicale.item as radicale_item
-from radicale import httputils, pathutils, rights, storage, types, xmlutils
+from radicale import (httputils, pathutils, rights, storage, types, utils,
+                      xmlutils)
 from radicale.app.base import Access, ApplicationBase
 from radicale.hook import HookNotificationItem, HookNotificationItemTypes
 from radicale.log import logger
 
 MIMETYPE_TAGS: Mapping[str, str] = {value: key for key, value in
                                     xmlutils.MIMETYPES.items()}
+
+PRODID = u"-//Radicale//NONSGML Version " + utils.package_version("radicale") + "//EN"
 
 
 def prepare(vobject_items: List[vobject.base.Component], path: str,
@@ -80,6 +86,7 @@ def prepare(vobject_items: List[vobject.base.Component], path: str,
                     vobject_collection = vobject.iCalendar()
                     for component in components:
                         vobject_collection.add(component)
+                    vobject_collection.add(vobject.base.ContentLine("PRODID", [], PRODID))
                     item = radicale_item.Item(collection_path=collection_path,
                                               vobject_item=vobject_collection)
                     item.prepare()
@@ -176,14 +183,16 @@ class ApplicationPartPut(ApplicationBase):
 
             if write_whole_collection:
                 if ("w" if tag else "W") not in access.permissions:
+                    if not parent_item.tag:
+                        logger.warning("Not a collection (check .Radicale.props): %r", parent_item.path)
                     return httputils.NOT_ALLOWED
                 if not self._permit_overwrite_collection:
                     if ("O") not in access.permissions:
-                        logger.info("overwrite of collection is prevented by config/option [rights] permit_overwrite_collection and not explicit allowed by permssion 'O': %s", path)
+                        logger.info("overwrite of collection is prevented by config/option [rights] permit_overwrite_collection and not explicit allowed by permssion 'O': %r", path)
                         return httputils.NOT_ALLOWED
                 else:
                     if ("o") in access.permissions:
-                        logger.info("overwrite of collection is allowed by config/option [rights] permit_overwrite_collection but explicit forbidden by permission 'o': %s", path)
+                        logger.info("overwrite of collection is allowed by config/option [rights] permit_overwrite_collection but explicit forbidden by permission 'o': %r", path)
                         return httputils.NOT_ALLOWED
             elif "w" not in access.parent_permissions:
                 return httputils.NOT_ALLOWED
@@ -191,15 +200,22 @@ class ApplicationPartPut(ApplicationBase):
             etag = environ.get("HTTP_IF_MATCH", "")
             if not item and etag:
                 # Etag asked but no item found: item has been removed
+                logger.warning("Precondition failed on PUT request for %r (HTTP_IF_MATCH: %s, item not existing)", path, etag)
                 return httputils.PRECONDITION_FAILED
             if item and etag and item.etag != etag:
                 # Etag asked but item not matching: item has changed
+                logger.warning("Precondition failed on PUT request for %r (HTTP_IF_MATCH: %s, item has different etag: %s)", path, etag, item.etag)
                 return httputils.PRECONDITION_FAILED
+            if item and etag:
+                logger.debug("Precondition passed on PUT request for %r (HTTP_IF_MATCH: %s, item has etag: %s)", path, etag, item.etag)
 
             match = environ.get("HTTP_IF_NONE_MATCH", "") == "*"
             if item and match:
                 # Creation asked but item found: item can't be replaced
+                logger.warning("Precondition failed on PUT request for %r (HTTP_IF_NONE_MATCH: *, creation requested but item found with etag: %s)", path, item.etag)
                 return httputils.PRECONDITION_FAILED
+            if match:
+                logger.debug("Precondition passed on PUT request for %r (HTTP_IF_NONE_MATCH: *)", path)
 
             if (tag != prepared_tag or
                     prepared_write_whole_collection != write_whole_collection):
@@ -250,9 +266,22 @@ class ApplicationPartPut(ApplicationBase):
                     )
                     self._hook.notify(hook_notification_item)
                 except ValueError as e:
-                    logger.warning(
-                        "Bad PUT request on %r (upload): %s", path, e, exc_info=True)
-                    return httputils.BAD_REQUEST
+                    # return better matching HTTP result in case errno is provided and catched
+                    errno_match = re.search("\\[Errno ([0-9]+)\\]", str(e))
+                    if errno_match:
+                        logger.error(
+                            "Failed PUT request on %r (upload): %s", path, e, exc_info=True)
+                        errno_e = int(errno_match.group(1))
+                        if errno_e == errno.ENOSPC:
+                            return httputils.INSUFFICIENT_STORAGE
+                        elif errno_e in [errno.EPERM, errno.EACCES]:
+                            return httputils.FORBIDDEN
+                        else:
+                            return httputils.INTERNAL_SERVER_ERROR
+                    else:
+                        logger.warning(
+                            "Bad PUT request on %r (upload): %s", path, e, exc_info=True)
+                        return httputils.BAD_REQUEST
 
             headers = {"ETag": etag}
             return client.CREATED, headers, None

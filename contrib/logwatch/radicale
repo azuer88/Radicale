@@ -1,0 +1,193 @@
+# This file is related to Radicale - CalDAV and CardDAV server
+#  for logwatch (script)
+# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
+#
+# Detail levels
+# >= 5: Logins
+# >= 10: ResponseTimes
+
+$Detail = $ENV{'LOGWATCH_DETAIL_LEVEL'} || 0;
+
+my %ResponseTimes;
+my %Responses;
+my %Requests;
+my %Logins;
+my %Loglevel;
+my %OtherEvents;
+
+my $sum;
+my $length;
+
+sub ResponseTimesMinMaxSum($$) {
+   my $req = $_[0];
+   my $time = $_[1];
+
+   $ResponseTimes{$req}->{'cnt'}++;
+
+   if (! defined $ResponseTimes{$req}->{'min'}) {
+      $ResponseTimes{$req}->{'min'} = $time;
+   } elsif ($ResponseTimes->{$req}->{'min'} > $time) {
+      $ResponseTimes{$req}->{'min'} = $time;
+   }
+
+   if (! defined $ResponseTimes{$req}->{'max'}) {
+      $ResponseTimes{$req}{'max'} = $time;
+   } elsif ($ResponseTimes{$req}->{'max'} < $time) {
+      $ResponseTimes{$req}{'max'} = $time;
+   }
+
+   $ResponseTimes{$req}->{'sum'} += $time;
+}
+
+sub Sum($) {
+   my $phash = $_[0];
+   my $sum = 0;
+   foreach my $entry (keys %$phash) {
+      $sum += $phash->{$entry};
+   }
+   return $sum;
+}
+
+sub MaxLength($) {
+   my $phash = $_[0];
+   my $length = 0;
+   foreach my $entry (keys %$phash) {
+      $length = length($entry) if (length($entry) > $length);
+   }
+   return $length;
+}
+
+while (defined($ThisLine = <STDIN>)) {
+   # count loglevel
+   if ( $ThisLine =~ /\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\] /o ) {
+      $Loglevel{$1}++
+   }       
+  
+   # parse log for events
+   if ( $ThisLine =~ /Radicale server ready/o ) {
+      $OtherEvents{"Radicale server started"}++;
+   }
+   elsif ( $ThisLine =~ /Stopping Radicale/o ) {
+      $OtherEvents{"Radicale server stopped"}++;
+   }
+   elsif ( $ThisLine =~ / (\S+) response status/o ) {
+      my $req = $1;
+      if ( $ThisLine =~ / \S+ response status for .* with depth '(\d)' in ([0-9.]+) seconds: (\d+)/o ) {
+         $req .= ":D=" . $1 . ":R=" . $3;
+         ResponseTimesMinMaxSum($req, $2) if ($Detail >= 10);
+      } elsif ( $ThisLine =~ / \S+ response status for .* in ([0-9.]+) seconds: (\d+)/ ) {
+         $req .= ":R=" . $2;
+         ResponseTimesMinMaxSum($req, $1) if ($Detail >= 10);
+      }
+      $Responses{$req}++;
+   }
+   elsif ( $ThisLine =~ / (\S+) request for/o ) {
+      my $req = $1;
+      if ( $ThisLine =~ / \S+ request for .* with depth '(\d)' received/o ) {
+         $req .= ":D=" . $1;
+      }
+      $Requests{$req}++;
+   }
+   elsif ( $ThisLine =~ / (Successful login): '([^']+)'/o ) {
+      $Logins{$2}++ if ($Detail >= 5);
+      $OtherEvents{$1}++;
+   }
+   elsif ( $ThisLine =~ / (Failed login attempt) /o ) {
+      $OtherEvents{$1}++;
+   }
+   elsif ( $ThisLine =~ /\[(DEBUG|INFO)\] /o ) {
+      # skip if DEBUG+INFO
+   }
+   else {
+      # Report any unmatched entries...
+      $ThisLine =~ s/^\[\d+(\/Thread-\d+)?\] //; # remove process/Thread ID
+      chomp($ThisLine);
+      $OtherList{$ThisLine}++;
+   }
+}
+
+if ($Started) {
+   print "\nStatistics:\n";
+   print "   Radicale started: $Started Time(s)\n";
+}
+
+if (keys %Loglevel) {
+   $sum = Sum(\%Loglevel);
+   print "\n**Loglevel counters**\n";
+   printf "%-18s | %7s | %5s |\n", "Loglevel", "cnt", "ratio";
+   print "-" x38 . "\n";
+   foreach my $level (sort keys %Loglevel) {
+      printf "%-18s | %7d |  %3d%% |\n", $level, $Loglevel{$level}, int(($Loglevel{$level} * 100) / $sum);
+   }
+   print "-" x38 . "\n";
+   printf "%-18s | %7d |  %3d%% |\n", "", $sum, 100;
+}
+
+if (keys %Requests) {
+   $sum = Sum(\%Requests);
+   print "\n**Request counters (D=<depth>)**\n";
+   printf "%-18s | %7s | %5s |\n", "Request", "cnt", "ratio";
+   print "-" x38 . "\n";
+   foreach my $req (sort keys %Requests) {
+      printf "%-18s | %7d |  %3d%% |\n", $req, $Requests{$req}, int(($Requests{$req} * 100) / $sum);
+   }
+   print "-" x38 . "\n";
+   printf "%-18s | %7d |  %3d%% |\n", "", $sum, 100;
+}
+
+if (keys %Responses) {
+   $sum = Sum(\%Responses);
+   print "\n**Response result counters ((D=<depth> R=<result>)**\n";
+   printf "%-18s | %7s | %5s |\n", "Response", "cnt", "ratio";
+   print "-" x38 . "\n";
+   foreach my $req (sort keys %Responses) {
+      printf "%-18s | %7d |  %3d%% |\n", $req, $Responses{$req}, int(($Responses{$req} * 100) / $sum);
+   }
+   print "-" x38 . "\n";
+   printf "%-18s | %7d |  %3d%% |\n", "", $sum, 100;
+}
+
+if (keys %Logins) {
+   $sum = Sum(\%Logins);
+   $length = MaxLength(\%Logins);
+   print "\n**Successful login counters**\n";
+   printf "%-" . $length . "s | %7s | %5s |\n", "Login", "cnt", "ratio";
+   print "-" x($length + 20) . "\n";
+   foreach my $login (sort keys %Logins) {
+      printf "%-" . $length . "s | %7d |  %3d%% |\n", $login, $Logins{$login}, int(($Logins{$login} * 100) / $sum);
+   }
+   print "-" x($length + 20) . "\n";
+   printf "%-" . $length . "s | %7d |  %3d%% |\n", "", $sum, 100;
+}
+
+if (keys %ResponseTimes) {
+   print "\n**Response timings (counts, seconds) (D=<depth> R=<result>)**\n";
+   printf "%-18s | %7s | %7s | %7s | %7s |\n", "Response", "cnt", "min", "max", "avg";
+   print "-" x60 . "\n";
+   foreach my $req (sort keys %ResponseTimes) {
+      printf "%-18s | %7d | %7.3f | %7.3f | %7.3f |\n", $req
+         , $ResponseTimes{$req}->{'cnt'}
+         , $ResponseTimes{$req}->{'min'}
+         , $ResponseTimes{$req}->{'max'}
+         , $ResponseTimes{$req}->{'sum'} / $ResponseTimes{$req}->{'cnt'};
+   }
+   print "-" x60 . "\n";
+}
+
+if (keys %OtherEvents) {
+   print "\n**Other Events**\n";
+   foreach $ThisOne (sort keys %OtherEvents) {
+      print "$ThisOne: $OtherEvents{$ThisOne} Time(s)\n";
+   }
+}
+
+if (keys %OtherList) {
+   print "\n**Unmatched Entries**\n";
+   foreach $ThisOne (sort keys %OtherList) {
+      print "$ThisOne: $OtherList{$ThisOne} Time(s)\n";
+   }
+}
+
+exit(0);
+
+# vim: shiftwidth=3 tabstop=3 syntax=perl et smartindent

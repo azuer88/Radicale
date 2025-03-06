@@ -3,8 +3,8 @@ name = "Radicale"
 # When the version is updated, a new section in the CHANGELOG.md file must be
 # added too.
 readme = "README.md"
-version = "3.3.1.dev"
-authors = [{name = "Guillaume Ayoub", email = "guillaume.ayoub@kozea.fr"}]
+version = "3.5.0.dev"
+authors = [{name = "Guillaume Ayoub", email = "guillaume.ayoub@kozea.fr"}, {name = "Unrud", email = "unrud@outlook.com"}, {name = "Peter Bieringer", email = "pb@bieringer.de"}]
 license = {text = "GNU GPL v3"}
 description = "CalDAV and CardDAV Server"
 keywords = ["calendar", "addressbook", "CalDAV", "CardDAV"]
@@ -17,7 +17,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License (GPL)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -28,12 +27,11 @@ classifiers = [
     "Topic :: Office/Business :: Groupware",
 ]
 urls = {Homepage = "https://radicale.org/"}
-requires-python = ">=3.8.0"
+requires-python = ">=3.9.0"
 dependencies = [
     "defusedxml",
     "passlib",
     "vobject>=0.9.6",
-    "python-dateutil>=2.7.3",
     "pika>=1.1.0",
 ]
 
@@ -74,7 +72,7 @@ skip_install = true
 
 [tool.tox.env.mypy]
 deps = ["mypy==1.11.0"]
-commands = [["mypy", "."]]
+commands = [["mypy", "--install-types", "--non-interactive", "."]]
 skip_install = true
 
 

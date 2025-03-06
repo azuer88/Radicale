@@ -2,7 +2,7 @@
 # Copyright © 2008 Nicolas Kandel
 # Copyright © 2008 Pascal Halter
 # Copyright © 2008-2017 Guillaume Ayoub
-# Copyright © 2017-2019 Unrud <unrud@outlook.com>
+# Copyright © 2017-2023 Unrud <unrud@outlook.com>
 # Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
@@ -226,7 +226,7 @@ class ParallelHTTPSServer(ParallelHTTPServer):
             except socket.timeout:
                 raise
             except Exception as e:
-                raise RuntimeError("SSL handshake failed: %s" % e) from e
+                raise RuntimeError("SSL handshake failed: %s client %s" % (e, str(client_address[0]))) from e
         except Exception:
             try:
                 self.handle_error(request, client_address)
@@ -301,7 +301,7 @@ def serve(configuration: config.Configuration,
 
     """
 
-    logger.info("Starting Radicale")
+    logger.info("Starting Radicale (%s)", utils.packages_version())
     # Copy configuration before modifying
     configuration = configuration.copy()
     configuration.update({"server": {"_internal_server": "True"}}, "server",

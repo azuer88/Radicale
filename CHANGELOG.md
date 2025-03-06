@@ -1,11 +1,68 @@
 # Changelog
 
+## 3.5.0.dev
+
+* Add: option [auth] type oauth2 by code migration from https://gitlab.mim-libre.fr/alphabet/radicale_oauth/-/blob/dev/oauth2/
+* Fix: catch OS errors on PUT MKCOL MKCALENDAR MOVE PROPPATCH (insufficient storage, access denied, internal server error)
+* Test: skip bcrypt related tests if module is missing
+* Improve: relax mtime check on storage filesystem, change test file location to "collection-root" directory
+* Add: option [auth] type pam by code migration from v1, add new option pam_serivce
+* Cosmetics: extend list of used modules with their version on startup
+* Improve: WebUI
+* Add: option [server] script_name for reverse proxy base_prefix handling
+* Fix: proper base_prefix stripping if running behind reverse proxy
+* Review: Apache reverse proxy config example
+
+## 3.4.1
+* Add: option [auth] dovecot_connection_type / dovecot_host / dovecot_port
+* Add: option [auth] type imap by code migration from https://github.com/Unrud/RadicaleIMAP/
+
+## 3.4.0
+* Add: option [auth] cache_logins/cache_successful_logins_expiry/cache_failed_logins for caching logins
+* Improve: [auth] log used hash method and result on debug for htpasswd authentication
+* Improve: [auth] htpasswd file now read and verified on start
+* Add: option [auth] htpasswd_cache to automatic re-read triggered on change (mtime or size) instead reading on each request
+* Improve: [auth] htpasswd: module 'bcrypt' is no longer mandatory in case digest method not used in file
+* Improve: [auth] successful/failed login logs now type and whether result was taken from cache
+* Improve: [auth] constant execution time for failed logins independent of external backend or by htpasswd used digest method
+* Drop: support for Python 3.8
+* Add: option [auth] ldap_user_attribute
+* Add: option [auth] ldap_groups_attribute as a more flexible replacement of removed ldap_load_groups
+
+## 3.3.3
+* Add: display mtime_ns precision of storage folder with condition warning if too less
+* Improve: disable fsync during storage verification
+* Improve: suppress duplicate log lines on startup
+* Contrib: logwatch config and script
+* Improve: log precondition result on PUT request
+
+## 3.3.2
+* Fix: debug logging in rights/from_file
+* Add: option [storage] use_cache_subfolder_for_item for storing 'item' cache outside collection-root
+* Fix: ignore empty RRULESET in item
+* Add: option [storage] filesystem_cache_folder for defining location of cache outside collection-root
+* Add: option [storage] use_cache_subfolder_for_history for storing 'history' cache outside collection-root
+* Add: option [storage] use_cache_subfolder_for_synctoken for storing 'sync-token' cache outside collection-root
+* Add: option [storage] folder_umask for configuration of umask (overwrite system-default)
+* Fix: also remove 'item' from cache on delete
+* Improve: avoid automatically invalid cache on upgrade in case no change on cache structure
+* Improve: log important module versions on startup
+* Improve: auth.ldap config shown on startup, terminate in case no password is supplied for bind user
+* Add: option [auth] uc_username for uppercase conversion (similar to existing lc_username)
+* Add: option [logging] storage_cache_action_on_debug for conditional logging
+* Fix: set PRODID on collection upload (instead of vobject is inserting default one)
+* Add: option [storage] use_mtime_and_size_for_item_cache for changing cache lookup from SHA256 to mtime_ns + size
+* Fix: buggy cache file content creation on collection upload
+
+## 3.3.1
+
 * Add: option [auth] type=dovecot
 * Enhancement: log content in case of multiple main components error
 * Fix: expand does not take timezones into account 
 * Fix: expand does not support overridden recurring events
 * Fix: expand does not honor start and end times
 * Add: option [server] protocol + ciphersuite for optional restrictions on SSL socket
+* Enhancement: [storage] hook documentation, logging, error behavior (no longer throwing an exception)
 
 ## 3.3.0
 

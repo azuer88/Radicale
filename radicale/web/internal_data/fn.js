@@ -2,6 +2,7 @@
  * This file is part of Radicale Server - Calendar Server
  * Copyright © 2017-2024 Unrud <unrud@outlook.com>
  * Copyright © 2023-2024 Matthew Hana <matthew.hana@gmail.com>
+ * Copyright © 2024-2025 Peter Bieringer <pb@bieringer.de>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -874,8 +875,7 @@ function UploadCollectionScene(user, password, collection) {
     upload_btn.onclick = upload_start;
     uploadfile_form.onchange = onfileschange;
 
-    let href = random_uuid();
-    href_form.value = href;
+    href_form.value = "";
 
     /** @type {?number} */ let scene_index = null;
     /** @type {?XMLHttpRequest} */ let upload_req = null;
@@ -927,7 +927,7 @@ function UploadCollectionScene(user, password, collection) {
                 if(files.length > 1 || href.length == 0){
                     href = random_uuid();
                 }
-                let upload_href = collection.href + "/" + href + "/";
+                let upload_href = collection.href + href + "/";
                 upload_req = upload_collection(user, password, upload_href, file, function(result) {
                     upload_req = null;
                     results.push(result);
@@ -993,10 +993,12 @@ function UploadCollectionScene(user, password, collection) {
             hreflimitmsg_html.classList.remove("hidden");
             href_form.classList.add("hidden");
             href_label.classList.add("hidden");
+            href_form.value = random_uuid(); // dummy, will be replaced on upload
         }else{
             hreflimitmsg_html.classList.add("hidden");
             href_form.classList.remove("hidden");
             href_label.classList.remove("hidden");
+            href_form.value = files[0].name.replace(/\.(ics|vcf)$/, '');
         }
         return false;
     }
@@ -1005,6 +1007,12 @@ function UploadCollectionScene(user, password, collection) {
         scene_index = scene_stack.length - 1;
         html_scene.classList.remove("hidden");
         close_btn.onclick = onclose;
+        if(error){
+            error_form.textContent = "Error: " + error;
+            error_form.classList.remove("hidden");
+        }else{
+            error_form.classList.add("hidden");
+        }
     };
 
     this.hide = function() {
@@ -1213,7 +1221,7 @@ function CreateEditCollectionScene(user, password, collection) {
                 alert("You must enter a valid HREF");
                 return false;
             }
-            href = collection.href + "/" + newhreftxtvalue + "/";
+            href = collection.href + newhreftxtvalue + "/";
         }
         displayname = displayname_form.value;
         description = description_form.value;
@@ -1317,6 +1325,12 @@ function CreateEditCollectionScene(user, password, collection) {
         fill_form();
         submit_btn.onclick = onsubmit;
         cancel_btn.onclick = oncancel;
+        if(error){
+            error_form.textContent = "Error: " + error;
+            error_form.classList.remove("hidden");
+        }else{
+            error_form.classList.add("hidden");
+        }
     };
     this.hide = function() {
         read_form();
@@ -1348,8 +1362,10 @@ function cleanHREFinput(a) {
         href_form = a.target;
     }
     let currentTxtVal = href_form.value.trim().toLowerCase();
-    //Clean the HREF to remove non lowercase letters and dashes
-    currentTxtVal = currentTxtVal.replace(/(?![0-9a-z\-\_])./g, '');
+    //Clean the HREF to remove not permitted chars
+    currentTxtVal = currentTxtVal.replace(/(?![0-9a-z\-\_\.])./g, '');
+    //Clean the HREF to remove leading . (would result in hidden directory)
+    currentTxtVal = currentTxtVal.replace(/^\./, '');
     href_form.value = currentTxtVal;
 }
 

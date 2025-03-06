@@ -1,7 +1,8 @@
 # This file is part of Radicale - CalDAV and CardDAV server
 # Copyright © 2014 Jean-Marc Martins
 # Copyright © 2012-2017 Guillaume Ayoub
-# Copyright © 2017-2018 Unrud <unrud@outlook.com>
+# Copyright © 2017-2021 Unrud <unrud@outlook.com>
+# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -72,6 +73,10 @@ class CollectionPartCache(CollectionBase):
         _hash.update(raw_text)
         return _hash.hexdigest()
 
+    @staticmethod
+    def _item_cache_mtime_and_size(size: int, raw_text: int) -> str:
+        return str(storage.CACHE_VERSION.decode()) + "size=" + str(size) + ";mtime=" + str(raw_text)
+
     def _item_cache_content(self, item: radicale_item.Item) -> CacheContent:
         return CacheContent(item.uid, item.etag, item.serialize(), item.name,
                             item.component_name, *item.time_range)
@@ -79,10 +84,12 @@ class CollectionPartCache(CollectionBase):
     def _store_item_cache(self, href: str, item: radicale_item.Item,
                           cache_hash: str = "") -> CacheContent:
         if not cache_hash:
-            cache_hash = self._item_cache_hash(
-                item.serialize().encode(self._encoding))
-        cache_folder = os.path.join(self._filesystem_path, ".Radicale.cache",
-                                    "item")
+            if self._storage._use_mtime_and_size_for_item_cache is True:
+                raise RuntimeError("_store_item_cache called without cache_hash is not supported if [storage] use_mtime_and_size_for_item_cache is True")
+            else:
+                cache_hash = self._item_cache_hash(
+                    item.serialize().encode(self._encoding))
+        cache_folder = self._storage._get_collection_cache_subfolder(self._filesystem_path, ".Radicale.cache", "item")
         content = self._item_cache_content(item)
         self._storage._makedirs_synced(cache_folder)
         # Race: Other processes might have created and locked the file.
@@ -95,14 +102,21 @@ class CollectionPartCache(CollectionBase):
 
     def _load_item_cache(self, href: str, cache_hash: str
                          ) -> Optional[CacheContent]:
-        cache_folder = os.path.join(self._filesystem_path, ".Radicale.cache",
-                                    "item")
+        cache_folder = self._storage._get_collection_cache_subfolder(self._filesystem_path, ".Radicale.cache", "item")
+        path = os.path.join(cache_folder, href)
         try:
-            with open(os.path.join(cache_folder, href), "rb") as f:
+            with open(path, "rb") as f:
                 hash_, *remainder = pickle.load(f)
                 if hash_ and hash_ == cache_hash:
+                    if self._storage._debug_cache_actions is True:
+                        logger.debug("Item cache match     : %r with hash %r", path, cache_hash)
                     return CacheContent(*remainder)
+                else:
+                    if self._storage._debug_cache_actions is True:
+                        logger.debug("Item cache no match  : %r with hash %r", path, cache_hash)
         except FileNotFoundError:
+            if self._storage._debug_cache_actions is True:
+                logger.debug("Item cache not found : %r with hash %r", path, cache_hash)
             pass
         except (pickle.UnpicklingError, ValueError) as e:
             logger.warning("Failed to load item cache entry %r in %r: %s",
@@ -110,8 +124,7 @@ class CollectionPartCache(CollectionBase):
         return None
 
     def _clean_item_cache(self) -> None:
-        cache_folder = os.path.join(self._filesystem_path, ".Radicale.cache",
-                                    "item")
+        cache_folder = self._storage._get_collection_cache_subfolder(self._filesystem_path, ".Radicale.cache", "item")
         self._clean_cache(cache_folder, (
             e.name for e in os.scandir(cache_folder) if not
             os.path.isfile(os.path.join(self._filesystem_path, e.name))))

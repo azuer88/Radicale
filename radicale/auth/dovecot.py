@@ -1,6 +1,7 @@
 # This file is part of Radicale Server - Calendar Server
 # Copyright © 2014 Giel van Schijndel
 # Copyright © 2019 (GalaxyMaster)
+# Copyright © 2025-2025 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -28,11 +29,24 @@ from radicale.log import logger
 class Auth(auth.BaseAuth):
     def __init__(self, configuration):
         super().__init__(configuration)
-        self.socket = configuration.get("auth", "dovecot_socket")
         self.timeout = 5
         self.request_id_gen = itertools.count(1)
 
-    def login(self, login, password):
+        config_family = configuration.get("auth", "dovecot_connection_type")
+        if config_family == "AF_UNIX":
+            self.family = socket.AF_UNIX
+            self.address = configuration.get("auth", "dovecot_socket")
+            logger.info("auth dovecot socket: %r", self.address)
+            return
+
+        self.address = configuration.get("auth", "dovecot_host"), configuration.get("auth", "dovecot_port")
+        logger.warning("auth dovecot address: %r (INSECURE, credentials are transmitted in clear text)", self.address)
+        if config_family == "AF_INET":
+            self.family = socket.AF_INET
+        else:
+            self.family = socket.AF_INET6
+
+    def _login(self, login, password):
         """Validate credentials.
 
         Check if the ``login``/``password`` pair is valid according to Dovecot.
@@ -49,12 +63,12 @@ class Auth(auth.BaseAuth):
             return ""
 
         with closing(socket.socket(
-                socket.AF_UNIX,
+                self.family,
                 socket.SOCK_STREAM)
         ) as sock:
             try:
                 sock.settimeout(self.timeout)
-                sock.connect(self.socket)
+                sock.connect(self.address)
 
                 buf = bytes()
                 supported_mechs = []
@@ -171,8 +185,8 @@ class Auth(auth.BaseAuth):
 
             except socket.error as e:
                 logger.fatal(
-                        "Failed to communicate with Dovecot socket %r: %s" %
-                        (self.socket, e)
+                        "Failed to communicate with Dovecot: %s" %
+                        (e)
                 )
 
         return ""

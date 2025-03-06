@@ -2,7 +2,7 @@
 # Copyright © 2012-2016 Jean-Marc Martins
 # Copyright © 2012-2017 Guillaume Ayoub
 # Copyright © 2017-2022 Unrud <unrud@outlook.com>
-# Copyright © 2024-2024 Peter Bieringer <pb@bieringer.de>
+# Copyright © 2024-2025 Peter Bieringer <pb@bieringer.de>
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ Radicale tests with simple requests and authentication.
 """
 
 import base64
+import logging
 import os
 import sys
 from typing import Iterable, Tuple, Union
@@ -39,6 +40,14 @@ class TestBaseAuthRequests(BaseTest):
     We should setup auth for each type before creating the Application object.
 
     """
+
+    # test for available bcrypt module
+    try:
+        import bcrypt
+    except ImportError:
+        has_bcrypt = 0
+    else:
+        has_bcrypt = 1
 
     def _test_htpasswd(self, htpasswd_encryption: str, htpasswd_content: str,
                        test_matrix: Union[str, Iterable[Tuple[str, str, bool]]]
@@ -90,16 +99,63 @@ class TestBaseAuthRequests(BaseTest):
     def test_htpasswd_sha512(self) -> None:
         self._test_htpasswd("sha512", "tmp:$6$3Qhl8r6FLagYdHYa$UCH9yXCed4A.J9FQsFPYAOXImzZUMfvLa0lwcWOxWYLOF5sE/lF99auQ4jKvHY2vijxmefl7G6kMqZ8JPdhIJ/")
 
+    @pytest.mark.skipif(has_bcrypt == 0, reason="No bcrypt module installed")
     def test_htpasswd_bcrypt(self) -> None:
         self._test_htpasswd("bcrypt", "tmp:$2y$05$oD7hbiQFQlvCM7zoalo/T.MssV3V"
                             "NTRI3w5KDnj8NTUKJNWfVpvRq")
 
+    @pytest.mark.skipif(has_bcrypt == 0, reason="No bcrypt module installed")
     def test_htpasswd_bcrypt_unicode(self) -> None:
         self._test_htpasswd("bcrypt", "😀:$2y$10$Oyz5aHV4MD9eQJbk6GPemOs4T6edK"
                             "6U9Sqlzr.W1mMVCS8wJUftnW", "unicode")
 
     def test_htpasswd_multi(self) -> None:
         self._test_htpasswd("plain", "ign:ign\ntmp:bepo")
+
+    # login cache successful
+    def test_htpasswd_login_cache_successful_plain(self, caplog) -> None:
+        caplog.set_level(logging.INFO)
+        self.configure({"auth": {"cache_logins": "True"}})
+        self._test_htpasswd("plain", "tmp:bepo", (("tmp", "bepo", True), ("tmp", "bepo", True)))
+        htpasswd_found = False
+        htpasswd_cached_found = False
+        for line in caplog.messages:
+            if line == "Successful login: 'tmp' (htpasswd)":
+                htpasswd_found = True
+            elif line == "Successful login: 'tmp' (htpasswd / cached)":
+                htpasswd_cached_found = True
+        if (htpasswd_found is False) or (htpasswd_cached_found is False):
+            raise ValueError("Logging misses expected log lines")
+
+    # login cache failed
+    def test_htpasswd_login_cache_failed_plain(self, caplog) -> None:
+        caplog.set_level(logging.INFO)
+        self.configure({"auth": {"cache_logins": "True"}})
+        self._test_htpasswd("plain", "tmp:bepo", (("tmp", "bepo1", False), ("tmp", "bepo1", False)))
+        htpasswd_found = False
+        htpasswd_cached_found = False
+        for line in caplog.messages:
+            if line == "Failed login attempt from unknown: 'tmp' (htpasswd)":
+                htpasswd_found = True
+            elif line == "Failed login attempt from unknown: 'tmp' (htpasswd / cached)":
+                htpasswd_cached_found = True
+        if (htpasswd_found is False) or (htpasswd_cached_found is False):
+            raise ValueError("Logging misses expected log lines")
+
+    # htpasswd file cache
+    def test_htpasswd_file_cache(self, caplog) -> None:
+        self.configure({"auth": {"htpasswd_cache": "True"}})
+        self._test_htpasswd("plain", "tmp:bepo")
+
+    # detection of broken htpasswd file entries
+    def test_htpasswd_broken(self) -> None:
+        for userpass in ["tmp:", ":tmp"]:
+            try:
+                self._test_htpasswd("plain", userpass)
+            except RuntimeError:
+                pass
+            else:
+                raise
 
     @pytest.mark.skipif(sys.platform == "win32", reason="leading and trailing "
                         "whitespaces not allowed in file names")
@@ -120,6 +176,11 @@ class TestBaseAuthRequests(BaseTest):
         self.configure({"auth": {"lc_username": "True"}})
         self._test_htpasswd("plain", "tmp:bepo", (
             ("tmp", "bepo", True), ("TMP", "bepo", True), ("tmp1", "bepo", False)))
+
+    def test_htpasswd_uc_username(self) -> None:
+        self.configure({"auth": {"uc_username": "True"}})
+        self._test_htpasswd("plain", "TMP:bepo", (
+            ("tmp", "bepo", True), ("TMP", "bepo", True), ("TMP1", "bepo", False)))
 
     def test_htpasswd_strip_domain(self) -> None:
         self.configure({"auth": {"strip_domain": "True"}})

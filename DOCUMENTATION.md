@@ -20,10 +20,11 @@ Radicale is a small but powerful CalDAV (calendars, to-do lists) and CardDAV
 
 #### Installation
 
-Radicale is really easy to install and works out-of-the-box.
+Radicale is really easy to install (for testing purposes) and works out-of-the-box.
 
 ```bash
-python3 -m pip install --upgrade https://github.com/Kozea/Radicale/archive/master.tar.gz
+# Run as normal user
+python3 -m pip install --user --upgrade https://github.com/Kozea/Radicale/archive/master.tar.gz
 python3 -m radicale --logging-level info --storage-filesystem-folder=~/.var/lib/radicale/collections
 ```
 
@@ -32,6 +33,8 @@ You can login with any username and password.
 
 Want more? Check the [tutorials](#tutorials) and the
 [documentation](#documentation-1).
+
+Instead of downloading from PyPI look for packages provided by used [distribution](#linux-distribution-packages), they contain also startup scripts to run daemonized.
 
 #### What's New?
 
@@ -46,25 +49,33 @@ You want to try Radicale but only have 5 minutes free in your calendar? Let's
 go right now and play a bit with Radicale!
 
 When everything works, you can get a [client](#supported-clients)
-and start creating calendars and address books. The server **only** binds to
-localhost (is **not** reachable over the network) and you can log in with any
-username and password. If Radicale fits your needs, it may be time for
-[some basic configuration](#basic-configuration).
+and start creating calendars and address books. By default, the server only binds to localhost (is not reachable over the network)
+and you can log in with any user name and password. When everything works, you may get a local client and start creating calendars and address books. If Radicale fits your needs, it may be time for some [basic configuration](#basic-configuration) to support remote clients.
 
 Follow one of the chapters below depending on your operating system.
 
 #### Linux / \*BSD
 
-First, make sure that **python** 3.8 or later and **pip** are installed. On most distributions it should be
+First, make sure that **python** 3.9 or later and **pip** are installed. On most distributions it should be
 enough to install the package ``python3-pip``.
 
 Then open a console and type:
 
 ```bash
-# Run the following command as root or
-# add the --user argument to only install for the current user
-$ python3 -m pip install --upgrade https://github.com/Kozea/Radicale/archive/master.tar.gz
-$ python3 -m radicale --storage-filesystem-folder=~/.var/lib/radicale/collections
+# Run the following command to only install for the current user
+#  data is also stored for the current user only
+python3 -m pip install --user --upgrade https://github.com/Kozea/Radicale/archive/master.tar.gz
+python3 -m radicale --storage-filesystem-folder=~/.var/lib/radicale/collections
+```
+
+Alternative one can install as root or system user
+
+```bash
+# Run the following command as root
+# or non-root system user (can require --user in case of dependencies are not available system-wide)
+#  requires existence of and write permissions to /var/lib/radicale/collections
+python3 -m pip install --upgrade https://github.com/Kozea/Radicale/archive/master.tar.gz
+python3 -m radicale --storage-filesystem-folder=/var/lib/radicale/collections
 ```
 
 Victory! Open <http://localhost:5232> in your browser!
@@ -248,7 +259,7 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/radicale/collections
+ReadWritePaths=/var/lib/radicale/ /var/cache/radicale/
 
 [Install]
 WantedBy=multi-user.target
@@ -537,7 +548,6 @@ location /radicale/ {
     # Place the files somewhere nginx is allowed to access (e.g. /etc/nginx/...).
     proxy_ssl_certificate         /path/to/client_cert.pem;
     proxy_ssl_certificate_key     /path/to/client_key.pem;
-    proxy_ssl_trusted_certificate /path/to/server_cert.pem;
 }
 ```
 
@@ -578,14 +588,31 @@ authentication over HTTP.
 This tutorial describes how to keep track of all changes to calendars and
 address books with **git** (or any other version control system).
 
-The repository must be initialized by running `git init` in the file
-system folder. Internal files of Radicale can be excluded by creating the
-file `.gitignore` with the following content:
+The repository must be initialized in the collection base directory
+of the user running `radicale` daemon.
 
-```gitignore
+```bash
+## assuming "radicale" user is starting "radicale" service
+# change to user "radicale"
+su -l -s /bin/bash radicale
+
+# change to collection base directory defined in [storage] -> filesystem_folder
+#  assumed here /var/lib/radicale/collections
+cd /var/lib/radicale/collections
+
+# initialize git repository
+git init
+
+# set user and e-mail, here minimum example
+git config user.name "$USER"
+git config user.email "$USER@$HOSTNAME"
+
+# define ignore of cache/lock/tmp files
+cat <<'END' >.gitignore
 .Radicale.cache
 .Radicale.lock
 .Radicale.tmp-*
+END
 ```
 
 The configuration option `hook` in the `storage` section must be set to
@@ -598,15 +625,22 @@ git add -A && (git diff --cached --quiet || git commit -m "Changes by \"%(user)s
 The command gets executed after every change to the storage and commits
 the changes into the **git** repository.
 
-For the hook to not cause errors either **git** user details need to be set and match the owner of the collections directory or the repository needs to be marked as safe.
+Log of `git` can be investigated using
 
-When using the systemd unit file from the [Running as a service](#running-as-a-service) section this **cannot** be done via a `.gitconfig` file in the users home directory, as Radicale won't have read permissions!
-
-In `/var/lib/radicale/collections/.git` run:
 ```bash
-git config user.name "radicale"
-git config user.email "radicale@example.com"
+su -l -s /bin/bash radicale
+cd /var/lib/radicale/collections
+git log
 ```
+
+In case of problems, make sure you run radicale with ``--debug`` switch and
+inspect the log output. For more information, please visit
+[section on logging](#logging-overview).
+
+Reason for problems can be
+ - SELinux status -> check related audit log
+ - problematic file/directory permissions
+ - command is not fond or cannot be executed or argument problem
 
 ## Documentation
 
@@ -648,6 +682,24 @@ python3 -m radicale --server-hosts 0.0.0.0:5232,[::]:5232 \
 
 Add the argument `--config ""` to stop Radicale from loading the default
 configuration files. Run `python3 -m radicale --help` for more information.
+
+One can also use command line options in startup scripts using following examples:
+
+```bash
+## simple variable containing multiple options
+RADICALE_OPTIONS="--logging-level=debug --config=/etc/radicale/config --logging-request-header-on-debug --logging-rights-rule-doesnt-match-on-debug"
+/usr/bin/radicale $RADICALE_OPTIONS
+
+## variable as array method #1
+RADICALE_OPTIONS=("--logging-level=debug" "--config=/etc/radicale/config" "--logging-request-header-on-debug" "--logging-rights-rule-doesnt-match-on-debug")
+/usr/bin/radicale ${RADICALE_OPTIONS[@]}
+
+## variable as array method #2
+RADICALE_OPTIONS=()
+RADICALE_OPTIONS+=("--logging-level=debug")
+RADICALE_OPTIONS+=("--config=/etc/radicale/config")
+/usr/bin/radicale ${RADICALE_OPTIONS[@]}
+```
 
 In the following, all configuration categories and options are described.
 
@@ -723,6 +775,12 @@ Format: OpenSSL cipher list (see also "man openssl-ciphers")
 
 Default: (system-default)
 
+##### script_name
+
+Strip script name from URI if called by reverse proxy
+
+Default: (taken from HTTP_X_SCRIPT_NAME or SCRIPT_NAME)
+
 #### encoding
 
 ##### request
@@ -767,9 +825,38 @@ Available backends:
 : Use a LDAP or AD server to authenticate users.
 
 `dovecot`
-: Use a local Dovecot server to authenticate users.
+: Use a Dovecot server to authenticate users.
+
+`imap`
+: Use an IMAP server to authenticate users.
+
+`oauth2`
+: Use an OAuth2 server to authenticate users.
+
+`pam`
+: Use local PAM to authenticate users.
+
 
 Default: `none`
+
+##### cache_logins
+
+Cache successful/failed logins until expiration time. Enable this to avoid
+overload of authentication backends.
+
+Default: `false`
+
+##### cache_successful_logins_expiry
+
+Expiration time of caching successful logins in seconds
+
+Default: `15`
+
+##### cache_failed_logins_expiry
+
+Expiration time of caching failed logins in seconds
+
+Default: `90`
 
 ##### htpasswd_filename
 
@@ -811,6 +898,12 @@ Available methods:
 : This selects autodetection of method per entry.
 
 Default: `autodetect`
+
+##### htpasswd_cache
+
+Enable caching of htpasswd file based on size and mtime_ns
+
+Default: `False`
 
 ##### delay
 
@@ -860,14 +953,26 @@ The search filter to find the user DN to authenticate by the username. User '{0}
 
 Default: `(cn={0})`
 
-##### ldap_load_groups
+##### ldap_user_attribute
 
-Load the ldap groups of the authenticated user. These groups can be used later on to define rights. This also gives you access to the group calendars, if they exist.
+The LDAP attribute whose value shall be used as the user name after successful authentication
+
+Default: not set, i.e. the login name given is used directly.
+
+##### ldap_groups_attribute
+
+The LDAP attribute to read the group memberships from in the authenticated user's LDAP entry.
+
+If set, load the LDAP group memberships from the attribute given
+These memberships can be used later on to define rights.
+This also gives you access to the group calendars, if they exist.
 * The group calendar will be placed under collection_root_folder/GROUPS
 * The name of the calendar directory is the base64 encoded group name.
-* The group calneder folders will not be created automaticaly. This must be created manualy. [Here](https://github.com/Kozea/Radicale/wiki/LDAP-authentication) you can find a script to create group calneder folders https://github.com/Kozea/Radicale/wiki/LDAP-authentication
+* The group calendar folders will not be created automatically. This must be done manually. In the [LDAP-authentication section of Radicale's wiki](https://github.com/Kozea/Radicale/wiki/LDAP-authentication) you can find a script to create a group calendar.
 
-Default: False
+Use 'memberOf' if you want to load groups on Active Directory and alikes, 'groupMembership' on Novell eDirectory, ...
+
+Default: unset
 
 ##### ldap_use_ssl
 
@@ -887,9 +992,59 @@ The path to the CA file in pem format which is used to certificate the server ce
 
 Default:
 
+##### dovecot_connection_type = AF_UNIX
+
+Connection type for dovecot authentication (AF_UNIX|AF_INET|AF_INET6)
+
+Note: credentials are transmitted in cleartext
+
+Default: `AF_UNIX`
+
 ##### dovecot_socket
 
 The path to the Dovecot client authentication socket (eg. /run/dovecot/auth-client on Fedora). Radicale must have read / write access to the socket.
+
+Default: `/var/run/dovecot/auth-client`
+
+##### dovecot_host
+
+Host of via network exposed dovecot socket
+
+Default: `localhost`
+
+##### dovecot_port
+
+Port of via network exposed dovecot socket
+
+Default: `12345`
+
+##### imap_host
+
+IMAP server hostname: address | address:port | [address]:port | imap.server.tld
+
+Default: `localhost`
+
+##### imap_security
+
+Secure the IMAP connection: tls | starttls | none
+
+Default: `tls`
+
+##### oauth2_token_endpoint
+
+OAuth2 token endpoint URL
+
+Default:
+
+##### pam_service
+
+PAM service
+
+Default: radicale
+
+##### pam_group_membership
+
+PAM group user should be member of
 
 Default:
 
@@ -899,6 +1054,17 @@ Default:
 providers like ldap, kerberos
 
 Default: `False`
+
+Note: cannot be enabled together with `uc_username`
+
+##### uc_username
+
+Сonvert username to uppercase, must be true for case-insensitive auth
+providers like ldap, kerberos
+
+Default: `False`
+
+Note: cannot be enabled together with `lc_username`
 
 ##### strip_domain
 
@@ -982,6 +1148,58 @@ Folder for storing local collections, created if not present.
 
 Default: `/var/lib/radicale/collections`
 
+##### filesystem_cache_folder
+
+Folder for storing cache of local collections, created if not present
+
+Default: (filesystem_folder)
+
+Note: only used in case of use_cache_subfolder_* options are active
+
+Note: can be used on multi-instance setup to cache files on local node (see below)
+
+##### use_cache_subfolder_for_item
+
+Use subfolder `collection-cache` for cache file structure of 'item' instead of inside collection folders, created if not present
+
+Default: `False`
+
+Note: can be used on multi-instance setup to cache 'item' on local node
+
+##### use_cache_subfolder_for_history
+
+Use subfolder `collection-cache` for cache file structure of 'history' instead of inside collection folders, created if not present
+
+Default: `False`
+
+Note: use only on single-instance setup, will break consistency with client in multi-instance setup
+
+##### use_cache_subfolder_for_synctoken
+
+Use subfolder `collection-cache` for cache file structure of 'sync-token' instead of inside collection folders, created if not present
+
+Default: `False`
+
+Note: use only on single-instance setup, will break consistency with client in multi-instance setup
+
+##### use_mtime_and_size_for_item_cache
+
+Use last modifiction time (nanoseconds) and size (bytes) for 'item' cache instead of SHA256 (improves speed)
+
+Default: `False`
+
+Note: check used filesystem mtime precision before enabling
+
+Note: conversion is done on access, bulk conversion can be done offline using storage verification option `radicale --verify-storage`
+
+##### folder_umask
+
+Use configured umask for folder creation (not applicable for OS Windows)
+
+Default: (system-default, usual `0022`)
+
+Useful value: `0077` (user:rw group:- other:-) or `0027` (user:rw group:r other:-) or `0007` (user:rw group:rw other:-) or `0022` (user:rw group:r other:r)
+
 ##### max_sync_token_age
 
 Delete sync-token that are older than the specified time. (seconds)
@@ -1000,6 +1218,11 @@ Command that is run after changes to storage. Take a look at the
 [Versioning with Git](#versioning-with-git) tutorial for an example.
 
 Default:
+
+Supported placeholders:
+ - `%(user)`: logged-in user
+
+Command will be executed with base directory defined in `filesystem_folder` (see above)
 
 ##### predefined_collections
 
@@ -1077,15 +1300,21 @@ Log request on level=debug
 
 Default: `False`
 
-##### response_content_on_debug = True
+##### response_content_on_debug
 
 Log response on level=debug
 
 Default: `False`
 
-##### rights_rule_doesnt_match_on_debug = True
+##### rights_rule_doesnt_match_on_debug
 
 Log rights rule which doesn't match on level=debug
+
+Default: `False`
+
+##### storage_cache_actions_on_debug
+
+Log storage cache actions on level=debug
 
 Default: `False`
 
@@ -1115,20 +1344,20 @@ Available types:
 
 Default: `none`
 
-#### rabbitmq_endpoint
+##### rabbitmq_endpoint
 
 End-point address for rabbitmq server.
 Ex: amqp://user:password@localhost:5672/
 
 Default:
 
-#### rabbitmq_topic
+##### rabbitmq_topic
 
 RabbitMQ topic to publish message.
 
 Default:
 
-#### rabbitmq_queue_type
+##### rabbitmq_queue_type
 
 RabbitMQ queue type for the topic.
 
@@ -1151,7 +1380,8 @@ Default: 10000
 Radicale has been tested with:
 
 * [Android](https://android.com/) with
-  [DAVx⁵](https://www.davx5.com/) (formerly DAVdroid)
+  [DAVx⁵](https://www.davx5.com/) (formerly DAVdroid),
+* [OneCalendar](https://www.onecalendar.nl/)
 * [GNOME Calendar](https://wiki.gnome.org/Apps/Calendar),
   [Contacts](https://wiki.gnome.org/Apps/Contacts) and
   [Evolution](https://wiki.gnome.org/Apps/Evolution)
@@ -1181,6 +1411,13 @@ failures. In these cases, you want to make sure the Radicale server is
 Enter the URL of the Radicale server (e.g. `http://localhost:5232`) and your
 username. DAVx⁵ will show all existing calendars and address books and you
 can create new.
+
+#### OneCalendar
+
+When adding account, select CalDAV account type, then enter user name, password and the
+Radicale server (e.g. `https://yourdomain:5232`). OneCalendar will show all
+existing calendars and (FIXME: address books), you need to select which ones
+you want to see. OneCalendar supports many other server types too.
 
 #### GNOME Calendar, Contacts
 
@@ -1304,7 +1541,7 @@ An example rights file:
 [root]
 user: .+
 collection:
-permissions: r
+permissions: R
 
 # Allow reading and writing principal collection (same as username)
 [principal]
@@ -1456,11 +1693,11 @@ address books that are direct children of the path `/USERNAME/`.
 
 Delete collections by deleting the corresponding folders.
 
-### Logging
+### Logging overview
 
 Radicale logs to `stderr`. The verbosity of the log output can be controlled
 with `--debug` command line argument or the `level` configuration option in
-the `logging` section.
+the [logging](#logging) section.
 
 ### Architecture
 
@@ -1528,7 +1765,7 @@ The ``radicale`` package offers the following modules.
 
 `ìtem`
 : Internal representation of address book and calendar entries. Based on
-  [VObject](https://eventable.github.io/vobject/).
+  [VObject](https://github.com/py-vobject/vobject/).
 
 `log`
 : The logger for Radicale based on the default Python logging module.
@@ -1602,7 +1839,7 @@ class Auth(BaseAuth):
     def __init__(self, configuration):
         super().__init__(configuration.copy(PLUGIN_CONFIG_SCHEMA))
 
-    def login(self, login, password):
+    def _login(self, login, password):
         # Get password from configuration option
         static_password = self.configuration.get("auth", "password")
         # Check authentication
